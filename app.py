@@ -1,12 +1,13 @@
 import streamlit as st
 import sys
 import os
+import re
 import time
 from io import StringIO
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Deep Research Agent",
+    page_title="Deep Research RAG Agent",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -71,7 +72,7 @@ st.markdown("""
   .hero p {
     color: var(--muted);
     font-size: 1.05rem;
-    max-width: 520px;
+    max-width: 560px;
     margin: 0 auto;
     line-height: 1.7;
   }
@@ -162,6 +163,19 @@ st.markdown("""
     font-size: .97rem;
   }
 
+  /* ── Source chips ── */
+  .source-chip {
+    display: inline-block;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: .25rem .8rem;
+    margin: .2rem .3rem .2rem 0;
+    font-size: .78rem;
+    color: var(--muted);
+  }
+  .source-chip b { color: var(--accent); }
+
   /* ── Metric row ── */
   .metric-row {
     display: flex; gap: 1rem; margin-bottom: 2rem; flex-wrap: wrap;
@@ -206,20 +220,27 @@ st.markdown("""
 # ── Hero ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
-  <div class="hero-badge">Multi-Agent · AI Research</div>
-  <h1>Deep Research Agent</h1>
-  <p>Enter any topic and watch four specialised AI agents collaborate — searching, scraping, writing, and critiquing — to produce a structured research report.</p>
+  <div class="hero-badge">Multi-Agent · RAG</div>
+  <h1>Deep Research RAG Agent</h1>
+  <p>Enter any topic and watch it search the web, scrape top sources, index them into a
+  vector store, retrieve the most relevant chunks, then write and critique a grounded,
+  cited report — end to end.</p>
 </div>
 """, unsafe_allow_html=True)
 
 
 # ── Pipeline step renderer ─────────────────────────────────────────────────────
 STEPS = [
-    ("🔍", "Search Agent",  "Discovering recent, reliable sources"),
-    ("📄", "Reader Agent",  "Scraping top URLs for deeper content"),
-    ("✍️", "Writer Chain",  "Drafting the structured report"),
-    ("🧐", "Critic Chain",  "Reviewing & scoring the report"),
+    ("🔍", "Search Agent",   "Discovering recent, reliable sources"),
+    ("🕸️", "Scraper",        "Fetching full text from top URLs"),
+    ("📚", "Vector Index",   "Chunking & embedding into a vector store"),
+    ("🎯", "Retriever",      "Retrieving the most relevant chunks for the topic"),
+    ("✍️", "Writer Chain",   "Drafting the grounded, cited report"),
+    ("🧐", "Critic Chain",   "Reviewing & scoring the report"),
 ]
+
+STEP_RE = re.compile(r'Step (\d+)')
+
 
 def render_steps(active: int):
     html = ""
@@ -265,6 +286,7 @@ if run:
     with left:
         st.markdown("#### Pipeline status")
         steps_placeholder = st.empty()
+        steps_placeholder.markdown(render_steps(0), unsafe_allow_html=True)
 
     with right:
         result_placeholder = st.empty()
@@ -277,20 +299,15 @@ if run:
         st.stop()
 
     # ── We monkey-patch print to capture step progress ──────────────────────
-    # The pipeline prints step banners — we intercept them to update the UI.
+    # The pipeline prints step banners ("Step N - ...") — we intercept them to update the UI.
     captured_steps = {"current": 0}
     original_print = print
 
     def ui_print(*args, **kwargs):
         text = " ".join(str(a) for a in args)
-        if "Step 1" in text:
-            captured_steps["current"] = 0
-        elif "Step 2" in text:
-            captured_steps["current"] = 1
-        elif "Step 3" in text:
-            captured_steps["current"] = 2
-        elif "Step 4" in text:
-            captured_steps["current"] = 3
+        match = STEP_RE.search(text)
+        if match:
+            captured_steps["current"] = int(match.group(1)) - 1
         steps_placeholder.markdown(
             render_steps(captured_steps["current"]),
             unsafe_allow_html=True,
@@ -330,8 +347,9 @@ if run:
     # ── Metrics ─────────────────────────────────────────────────────────────
     with right:
         report_words = len(state.get("report", "").split())
-        search_chars = len(state.get("search_results", ""))
-        scraped_chars = len(state.get("scraped_content", ""))
+        num_chunks = state.get("num_chunks", 0)
+        num_sources = len(state.get("sources", []))
+        num_pages = len(state.get("scraped_pages", []))
 
         st.markdown(f"""
         <div class="metric-row">
@@ -340,23 +358,27 @@ if run:
             <div class="metric-lbl">Total time</div>
           </div>
           <div class="metric-card">
+            <div class="metric-val">{num_pages}</div>
+            <div class="metric-lbl">Pages scraped</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val">{num_chunks}</div>
+            <div class="metric-lbl">Chunks indexed</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val">{num_sources}</div>
+            <div class="metric-lbl">Sources cited</div>
+          </div>
+          <div class="metric-card">
             <div class="metric-val">{report_words:,}</div>
             <div class="metric-lbl">Report words</div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-val">{search_chars:,}</div>
-            <div class="metric-lbl">Search chars</div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-val">{scraped_chars:,}</div>
-            <div class="metric-lbl">Scraped chars</div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
         # Tabs for each output
-        tab_report, tab_feedback, tab_search, tab_scraped = st.tabs([
-            "📝 Report", "🧐 Critic Feedback", "🔍 Search Results", "📄 Scraped Content"
+        tab_report, tab_feedback, tab_context, tab_search, tab_scraped = st.tabs([
+            "📝 Report", "🧐 Critic Feedback", "📚 Retrieved Context", "🔍 Search Results", "📄 Scraped Pages"
         ])
 
         with tab_report:
@@ -379,6 +401,18 @@ if run:
               <div class="panel-content scroll-box">{state.get('feedback','—')}</div>
             </div>""", unsafe_allow_html=True)
 
+        with tab_context:
+            sources = state.get("sources", [])
+            chips = "".join(
+                f'<span class="source-chip"><b>[{i+1}]</b> {s}</span>' for i, s in enumerate(sources)
+            ) or '<span class="source-chip">No sources retrieved</span>'
+            st.markdown(f"""
+            <div class="panel">
+              <div class="panel-header"><span class="dot" style="background:var(--accent2)"></span>Retrieved Chunks (what the Writer actually saw)</div>
+              <div style="margin-bottom:.9rem">{chips}</div>
+              <div class="panel-content scroll-box">{state.get('retrieved_context','—')}</div>
+            </div>""", unsafe_allow_html=True)
+
         with tab_search:
             st.markdown(f"""
             <div class="panel">
@@ -389,7 +423,7 @@ if run:
         with tab_scraped:
             st.markdown(f"""
             <div class="panel">
-              <div class="panel-header"><span class="dot" style="background:var(--accent2)"></span>Reader Agent Output</div>
+              <div class="panel-header"><span class="dot" style="background:var(--accent2)"></span>Scraped Page Text (pre-chunking)</div>
               <div class="panel-content scroll-box">{state.get('scraped_content','—')}</div>
             </div>""", unsafe_allow_html=True)
 
